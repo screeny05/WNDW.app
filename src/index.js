@@ -1,5 +1,16 @@
-const { app, BrowserWindow, desktopCapturer, ipcMain } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  desktopCapturer,
+  ipcMain,
+  globalShortcut,
+  Menu,
+  Tray,
+  screen,
+} = require("electron");
 const path = require("path");
+
+const ioHook = require("iohook");
 
 // Handle creating/removing shortcuts on Windows when installing/uninstalling.
 if (require("electron-squirrel-startup")) {
@@ -10,12 +21,18 @@ if (require("electron-squirrel-startup")) {
 require("@electron/remote/main").initialize();
 
 var mainWindow;
+var hintWindow;
+var tray;
+var menu;
+var sources = [];
+var currentSourceId;
 
 const createWindow = () => {
   // Create the browser window.
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 720,
+    width: 1920,
+    height: 1080,
+    resizable: false,
     minWidth: 720,
     minHeight: 720,
     maxWidth: 5000,
@@ -25,54 +42,159 @@ const createWindow = () => {
       contextIsolation: false,
       backgroundThrottling: false,
     },
+    frame: false,
+    roundedCorners: false,
+    hasShadow: false,
+    show: false,
   });
+  moveWindowToOffset();
+
+  hintWindow = new BrowserWindow({
+    x: 0,
+    y: 0,
+    focusable: false,
+    transparent: true,
+    frame: false,
+    alwaysOnTop: true,
+    roundedCorners: false,
+    resizable: false,
+    movable: false,
+    enableLargerThanScreen: true,
+    hasShadow: false,
+    skipTaskbar: true,
+    show: false,
+  });
+  hintWindow.setIgnoreMouseEvents(true);
 
   require("@electron/remote/main").enable(mainWindow.webContents);
 
   // and load the index.html of the app.
   mainWindow.loadFile(path.join(__dirname, "index.html"));
+  hintWindow.loadFile(path.join(__dirname, "hint.html"));
 
   // Open the DevTools.
-  //mainWindow.webContents.openDevTools();
+  // mainWindow.webContents.openDevTools();
+  // hintWindow.webContents.openDevTools({ mode: "detach" });
+
+  mainWindow.addListener("closed", () => app.quit());
 };
 
-ipcMain.on("screen-capture", async (event, arg) => {
-  desktopCapturer
-    .getSources({
-      types: ["screen"],
-      thumbnailSize: { width: 300, height: 300 },
-    })
-    .then((sources) => {
-      event.sender.send("screen-capture-reply", sources);
-    });
+ipcMain.on("source-bounds-change", (_, bounds) => {
+  hintWindow.setBounds(bounds);
 });
 
-ipcMain.on("resize11720", async (event, arg) => {
-  mainWindow.setSize(720, 720, true);
+let keys = {};
+ioHook.on("keydown", (event) => (keys = event));
+ioHook.on("keyup", (event) => (keys = event));
+ioHook.on("mousewheel", (event) => {
+  if (keys.metaKey && keys.altKey) {
+    mainWindow.webContents.send("bounds-x", event.rotation * 10);
+  }
 });
-ipcMain.on("resize169720", async (event, arg) => {
-  mainWindow.setSize(1280, 720, true);
-});
-ipcMain.on("resize111080", async (event, arg) => {
-  mainWindow.setSize(1080, 1080, true);
-});
-ipcMain.on("resize1691080", async (event, arg) => {
-  mainWindow.setSize(1920, 1080, true);
-});
-
-ipcMain.on("resizecustom", async (event, { width, height }) => {
-  console.log(typeof width, height);
-  mainWindow.setSize(parseInt(width), parseInt(height), true);
-});
-
-app.on("ready", createWindow);
 
 app.on("window-all-closed", () => {
   app.quit();
 });
 
-app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
+app.on("before-quit", () => {
+  ioHook.stop();
+  ioHook.unload();
 });
+
+app.whenReady().then(() => {
+  createWindow();
+
+  globalShortcut.register("Super+Control+Option+Shift+Left", () => {
+    mainWindow.webContents.send("bounds-x", -10);
+  });
+  globalShortcut.register("Super+Control+Option+Shift+Right", () => {
+    mainWindow.webContents.send("bounds-x", 10);
+  });
+  globalShortcut.register("Super+Control+Option+Shift+S", () => {
+    toggleSharing();
+  });
+
+  tray = new Tray(path.join(__dirname, "icons/tray2.png"));
+  tray.setToolTip("WNDW");
+
+  renderMenu();
+  screen.addListener("display-added", () => renderMenu());
+  screen.addListener("display-removed", () => renderMenu());
+});
+
+const renderMenu = async () => {
+  sources = await desktopCapturer.getSources({
+    types: ["screen"],
+  });
+  currentSourceId ??= screen.getPrimaryDisplay().id.toString();
+
+  menu = Menu.buildFromTemplate([
+    {
+      label: isSharing ? "Stop sharing" : "Start sharing",
+      click: () => toggleSharing(),
+      accelerator: "Super+Control+Option+Shift+S",
+    },
+    { type: "separator" },
+    ...sources.map((source) => ({
+      label: source.id,
+      type: "radio",
+      checked: source.display_id === currentSourceId,
+      click: () => {
+        currentSourceId = source.display_id;
+        renderMenu();
+      },
+    })),
+    { type: "separator" },
+    { label: "WNDW Version 2.0.0", enabled: false },
+    { label: "Quit", click: () => app.quit() },
+  ]);
+  tray.setContextMenu(menu);
+};
+
+let isSharing = false;
+const startSharing = () => {
+  ioHook.start();
+  hintWindow.show();
+  mainWindow.show();
+  mainWindow.webContents.send("sharing-start", getCurrentSource());
+  moveWindowToOffset();
+
+  isSharing = true;
+  renderMenu();
+};
+const stopSharing = () => {
+  ioHook.stop();
+  hintWindow.hide();
+  mainWindow.hide();
+  mainWindow.webContents.send("sharing-stop");
+
+  isSharing = false;
+  renderMenu();
+};
+const toggleSharing = () => {
+  if (isSharing) {
+    stopSharing();
+  } else {
+    startSharing();
+  }
+};
+
+const getCurrentSource = () => {
+  return (
+    sources.find((source) => source.display_id === currentSourceId) ??
+    sources[0]
+  );
+};
+
+const getMainWindowScreen = () => {
+  const bounds = mainWindow.getBounds();
+  return screen.getDisplayNearestPoint({ x: bounds.x, y: bounds.y });
+};
+
+const moveWindowToOffset = () => {
+  const currentScreen = getMainWindowScreen();
+  mainWindow.setBounds({
+    x: currentScreen.bounds.width - 40,
+    y: currentScreen.bounds.height - 40,
+  });
+};
