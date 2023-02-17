@@ -162,11 +162,11 @@ const startSharing = () => {
   isSharing = true;
   renderMenu();
 };
-const stopSharing = () => {
+const stopSharing = async () => {
+  await stopShareInMainWindow();
   ioHook.stop();
   hintWindow.hide();
   mainWindow.hide();
-  mainWindow.webContents.send("sharing-stop");
 
   isSharing = false;
   renderMenu();
@@ -185,6 +185,14 @@ const getCurrentSource = () => {
     sources[0]
   );
 };
+
+const stopShareInMainWindow = () =>
+  new Promise((resolve) => {
+    mainWindow.webContents.send("sharing-stop");
+    // Wait until the content of the screen is no longer visible in the window.
+    // May be helpful when screen-sharing has to be abruptly cancelled.
+    setTimeout(resolve, 100);
+  });
 
 const getMainWindowScreen = () => {
   const bounds = mainWindow.getBounds();
