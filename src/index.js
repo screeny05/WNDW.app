@@ -105,10 +105,10 @@ app.whenReady().then(() => {
   createWindow();
 
   globalShortcut.register("Super+Control+Option+Shift+Left", () => {
-    mainWindow.webContents.send("bounds-x", -10);
+    mainWindow.webContents.send("bounds-x", -50);
   });
   globalShortcut.register("Super+Control+Option+Shift+Right", () => {
-    mainWindow.webContents.send("bounds-x", 10);
+    mainWindow.webContents.send("bounds-x", 50);
   });
   globalShortcut.register("Super+Control+Option+Shift+S", () => {
     toggleSharing();
@@ -154,8 +154,8 @@ const renderMenu = async () => {
 let isSharing = false;
 const startSharing = () => {
   ioHook.start();
-  hintWindow.show();
-  mainWindow.show();
+  hintWindow.showInactive();
+  mainWindow.showInactive();
   mainWindow.webContents.send("sharing-start", getCurrentSource());
   moveWindowToOffset();
 
